@@ -463,4 +463,201 @@ contract VaultIDV3Test is Test {
         uint256 id = _mintAsAlice();
         assertEq(vault.tokenURI(id), "ipfs://meta");
     }
+
+    // -----------------------------------------------------------------
+    // Audit fix: issuer revocation cannot be undone by vault owner
+    // -----------------------------------------------------------------
+
+    function _mintAsAliceWithIssuer() internal returns (uint256 tokenId) {
+        VaultIDV3.MintParams memory p = _defaultParams();
+        p.issuer = issuer;
+        vm.startPrank(alice);
+        clawd.approve(address(vault), CLAWD_PRICE);
+        tokenId = vault.mintWithCLAWD(p);
+        vm.stopPrank();
+    }
+
+    function test_unrevokeRevertsWhenIssuerRevokedAndCallerNotContractOwner() public {
+        _registerAndVerifyIssuer();
+        uint256 id = _mintAsAliceWithIssuer();
+
+        // Issuer revokes.
+        vm.prank(issuer);
+        vault.revoke(id);
+        assertFalse(vault.isValid(id));
+
+        // Vault owner (alice) cannot undo the issuer revocation.
+        vm.prank(alice);
+        vm.expectRevert(VaultIDV3.NotAuthorizedToUnrevoke.selector);
+        vault.unrevoke(id);
+
+        // Random third party also cannot.
+        vm.prank(bob);
+        vm.expectRevert(VaultIDV3.NotAuthorizedToUnrevoke.selector);
+        vault.unrevoke(id);
+
+        // Still revoked.
+        assertFalse(vault.isValid(id));
+    }
+
+    function test_contractOwnerCanUnrevokeIssuerRevokedCredential() public {
+        _registerAndVerifyIssuer();
+        uint256 id = _mintAsAliceWithIssuer();
+
+        vm.prank(issuer);
+        vault.revoke(id);
+        assertFalse(vault.isValid(id));
+
+        vm.expectEmit(true, true, true, true);
+        emit VaultIDV3.VaultUnrevoked(id);
+        vm.prank(owner);
+        vault.unrevoke(id);
+        assertTrue(vault.isValid(id));
+
+        // After the contract owner unrevokes, the vault owner is free to revoke
+        // and unrevoke themselves again (the issuer-revoked flag was cleared).
+        vm.prank(alice);
+        vault.revoke(id);
+        vm.prank(alice);
+        vault.unrevoke(id);
+        assertTrue(vault.isValid(id));
+    }
+
+    function test_ownerSelfRevokeCanBeSelfUnrevoked() public {
+        // Self-revocations (msg.sender == ownerOf(tokenId)) should remain
+        // owner-undoable — they are not marked as issuer revocations.
+        uint256 id = _mintAsAlice();
+
+        vm.prank(alice);
+        vault.revoke(id);
+        assertFalse(vault.isValid(id));
+
+        vm.prank(alice);
+        vault.unrevoke(id);
+        assertTrue(vault.isValid(id));
+    }
+
+    // -----------------------------------------------------------------
+    // Audit fix: setRecoveryWallet cannot equal vault owner
+    // -----------------------------------------------------------------
+
+    function test_setRecoveryWalletRevertsWhenWalletEqualsVaultOwner() public {
+        uint256 id = _mintAsAlice();
+        vm.prank(alice);
+        vm.expectRevert(VaultIDV3.RecoveryWalletCannotBeOwner.selector);
+        vault.setRecoveryWallet(id, alice);
+    }
+
+    function test_setRecoveryWalletAllowsZeroAddress() public {
+        uint256 id = _mintAsAlice();
+        vm.prank(alice);
+        vault.setRecoveryWallet(id, address(0));
+        (, address newRecovery,,,,,,,) = vault.vaults(id);
+        assertEq(newRecovery, address(0));
+    }
+
+    // -----------------------------------------------------------------
+    // Audit fix: extendExpiry is strictly extending only
+    // -----------------------------------------------------------------
+
+    function test_extendExpiryRevertsWhenNotExtending() public {
+        uint256 id = _mintAsAlice();
+        uint64 first = uint64(block.timestamp + 100);
+
+        vm.prank(alice);
+        vault.extendExpiry(id, first);
+
+        // Same value is not strictly greater — reverts.
+        vm.prank(alice);
+        vm.expectRevert(VaultIDV3.ExpiryNotExtended.selector);
+        vault.extendExpiry(id, first);
+
+        // Shorter (but still in future) — reverts.
+        vm.prank(alice);
+        vm.expectRevert(VaultIDV3.ExpiryNotExtended.selector);
+        vault.extendExpiry(id, uint64(block.timestamp + 50));
+    }
+
+    function test_extendExpiryRevertsWhenClearingSetExpiry() public {
+        uint256 id = _mintAsAlice();
+        vm.prank(alice);
+        vault.extendExpiry(id, uint64(block.timestamp + 100));
+
+        // Cannot clear a previously set expiry by passing 0.
+        vm.prank(alice);
+        vm.expectRevert(VaultIDV3.ExpiryNotExtended.selector);
+        vault.extendExpiry(id, 0);
+    }
+
+    function test_extendExpiryFromZeroToFutureSucceeds() public {
+        uint256 id = _mintAsAlice();
+        uint64 newExp = uint64(block.timestamp + 100);
+        vm.prank(alice);
+        vault.extendExpiry(id, newExp);
+        (,, uint64 storedExp,,,,,,) = vault.vaults(id);
+        assertEq(storedExp, newExp);
+    }
+
+    function test_extendExpiryStrictlyForwardSucceeds() public {
+        uint256 id = _mintAsAlice();
+        uint64 first = uint64(block.timestamp + 100);
+        uint64 second = uint64(block.timestamp + 200);
+
+        vm.prank(alice);
+        vault.extendExpiry(id, first);
+        vm.prank(alice);
+        vault.extendExpiry(id, second);
+
+        (,, uint64 storedExp,,,,,,) = vault.vaults(id);
+        assertEq(storedExp, second);
+    }
+
+    // -----------------------------------------------------------------
+    // Audit fix: recovery clears revoked state
+    // -----------------------------------------------------------------
+
+    function test_recoverVaultClearsRevokedState() public {
+        uint256 id = _mintAsAlice();
+
+        // Alice revokes herself, then loses access and recovery wallet recovers.
+        vm.prank(alice);
+        vault.revoke(id);
+        assertFalse(vault.isValid(id));
+
+        vm.prank(recovery);
+        uint256 newId = vault.recoverVault(id);
+
+        // New token must not be revoked.
+        (,,, bool newRevoked,,,,,) = vault.vaults(newId);
+        assertFalse(newRevoked);
+        assertTrue(vault.isValid(newId));
+    }
+
+    function test_recoverVaultClearsIssuerRevokedState() public {
+        _registerAndVerifyIssuer();
+        uint256 id = _mintAsAliceWithIssuer();
+
+        // Issuer revokes.
+        vm.prank(issuer);
+        vault.revoke(id);
+        assertFalse(vault.isValid(id));
+
+        // Recovery escape hatch reissues a clean token.
+        vm.prank(recovery);
+        uint256 newId = vault.recoverVault(id);
+
+        (,,, bool newRevoked,,,,,) = vault.vaults(newId);
+        assertFalse(newRevoked);
+        assertTrue(vault.isValid(newId));
+
+        // And critically: after recovery, the new token owner (recovery wallet)
+        // is treated as a fresh vault owner — the issuer-revoked flag does not
+        // persist across recovery, so the new owner can self-revoke and
+        // self-unrevoke as usual.
+        vm.prank(recovery);
+        vault.revoke(newId);
+        vm.prank(recovery);
+        vault.unrevoke(newId);
+        assertTrue(vault.isValid(newId));
+    }
 }

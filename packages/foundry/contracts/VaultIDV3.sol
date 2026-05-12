@@ -93,6 +93,7 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
     mapping(uint256 => MembershipInfo) public memberships;
     mapping(address => IssuerInfo) public issuers;
     mapping(uint256 => mapping(address => bool)) public viewerPermissions;
+    mapping(uint256 => bool) private _revokedByIssuer;
 
     uint256 public clawdMintPrice; // default 25_000 * 1e18
     uint256 public usdcMintPrice; // 10 USDC = 10_000_000
@@ -131,12 +132,15 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
     error NotVaultOwner();
     error NotRecoveryWallet();
     error NotAuthorizedToRevoke();
+    error NotAuthorizedToUnrevoke();
     error VaultNotFound();
     error ZeroAddress();
     error ExpiryInPast();
+    error ExpiryNotExtended();
     error AlreadyRevoked();
     error NotRevoked();
     error IssuerNotActive();
+    error RecoveryWalletCannotBeOwner();
 
     // ---------------------------------------------------------------------
     // Constructor
@@ -242,6 +246,7 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
         // Clear ancillary state.
         delete vaults[tokenId];
         delete memberships[tokenId];
+        delete _revokedByIssuer[tokenId];
 
         emit VaultBurned(tokenId, vaultOwner);
     }
@@ -254,23 +259,26 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
         // Burn old token.
         _burn(tokenId);
         delete vaults[tokenId];
+        delete _revokedByIssuer[tokenId];
         // Preserve membership info under new token id by carrying it across.
         MembershipInfo memory m = memberships[tokenId];
         delete memberships[tokenId];
 
-        // Remint to recovery wallet, preserving fields, clearing recoveryWallet on new token.
+        // Remint to recovery wallet, preserving fields, clearing recoveryWallet and revoked state on new token.
+        // Recovery is an escape hatch: the issuer can re-revoke if they choose.
         newTokenId = _nextTokenId++;
         vaults[newTokenId] = Vault({
             owner: msg.sender,
             recoveryWallet: address(0),
             expiry: v.expiry,
-            revoked: v.revoked,
+            revoked: false,
             credType: v.credType,
             issuer: v.issuer,
             encryptedPayloadRef: v.encryptedPayloadRef,
             metadataURI: v.metadataURI,
             schemaVersion: v.schemaVersion
         });
+        _revokedByIssuer[newTokenId] = false;
 
         if (v.credType == CredentialType.MEMBERSHIP) {
             memberships[newTokenId] = m;
@@ -291,15 +299,30 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
         if (!isOwner && !isIssuer) revert NotAuthorizedToRevoke();
 
         v.revoked = true;
+        // Any revoker that is not the current token owner is an external revoker
+        // (issuer or contract admin); their revocation may only be undone by the
+        // LeftClaw contract owner — the vault owner cannot self-unrevoke.
+        if (msg.sender != ownerOf(tokenId)) {
+            _revokedByIssuer[tokenId] = true;
+        }
         emit VaultRevoked(tokenId, msg.sender);
     }
 
     function unrevoke(uint256 tokenId) external {
         _requireExists(tokenId);
-        if (ownerOf(tokenId) != msg.sender) revert NotVaultOwner();
         Vault storage v = vaults[tokenId];
         if (!v.revoked) revert NotRevoked();
+
+        if (_revokedByIssuer[tokenId]) {
+            // Only the LeftClaw contract owner can override an issuer revocation.
+            if (msg.sender != owner()) revert NotAuthorizedToUnrevoke();
+        } else {
+            // Otherwise only the vault owner may unrevoke their own revocation.
+            if (ownerOf(tokenId) != msg.sender) revert NotVaultOwner();
+        }
+
         v.revoked = false;
+        _revokedByIssuer[tokenId] = false;
         emit VaultUnrevoked(tokenId);
     }
 
@@ -307,6 +330,16 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
         _requireExists(tokenId);
         if (ownerOf(tokenId) != msg.sender) revert NotVaultOwner();
         if (newExpiry != 0 && newExpiry <= block.timestamp) revert ExpiryInPast();
+
+        uint64 currentExpiry = vaults[tokenId].expiry;
+        // Expiry is strictly extending only: once set, it can only be pushed further
+        // out. It can be set from 0 (no expiry) to any future date, but cannot be
+        // shortened or cleared.
+        if (currentExpiry != 0) {
+            if (newExpiry == 0) revert ExpiryNotExtended();
+            if (newExpiry <= currentExpiry) revert ExpiryNotExtended();
+        }
+
         vaults[tokenId].expiry = newExpiry;
         if (vaults[tokenId].credType == CredentialType.MEMBERSHIP) {
             memberships[tokenId].expiry = newExpiry;
@@ -317,6 +350,7 @@ contract VaultIDV3 is ERC721, Ownable2Step, ReentrancyGuard {
     function setRecoveryWallet(uint256 tokenId, address wallet) public {
         _requireExists(tokenId);
         if (ownerOf(tokenId) != msg.sender) revert NotVaultOwner();
+        if (wallet != address(0) && wallet == ownerOf(tokenId)) revert RecoveryWalletCannotBeOwner();
         vaults[tokenId].recoveryWallet = wallet;
         emit RecoveryWalletSet(tokenId, wallet);
     }
