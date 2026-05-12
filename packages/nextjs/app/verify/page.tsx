@@ -1,39 +1,69 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import type { NextPage } from "next";
+import { useSearchParams } from "next/navigation";
 import { Address } from "@scaffold-ui/components";
 import { useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
 const CRED_TYPE_LABELS = ["VAULT", "MEMBERSHIP", "CREDENTIAL", "PASS", "RECEIPT", "DOCUMENT"];
 
-const VerifyPage: NextPage = () => {
-  const params = useParams();
-  const router = useRouter();
-  const tokenId = BigInt((params?.tokenId as string) ?? "0");
+function TokenIdForm() {
+  const [inputId, setInputId] = useState("");
+  return (
+    <div className="flex items-center flex-col grow pt-10 pb-20">
+      <div className="px-5 max-w-lg w-full">
+        <h1 className="text-3xl font-bold mb-6">Verify Credential</h1>
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h3 className="font-semibold mb-2">Enter a token ID to verify</h3>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                className="input input-bordered flex-1"
+                placeholder="Token ID"
+                value={inputId}
+                onChange={e => setInputId(e.target.value)}
+                onKeyDown={e =>
+                  e.key === "Enter" && inputId.trim() && (window.location.href = `/verify?id=${inputId.trim()}`)
+                }
+              />
+              <button
+                className="btn btn-primary"
+                onClick={() => inputId.trim() && (window.location.href = `/verify?id=${inputId.trim()}`)}
+              >
+                Check
+              </button>
+            </div>
+            <div className="mt-2">
+              <Link href="/" className="btn btn-ghost btn-sm">
+                Home
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+function VerifyDetail({ tokenId }: { tokenId: bigint }) {
   const [checkTokenId, setCheckTokenId] = useState("");
 
-  // Read vault data
   const { data: vaultData, isLoading: vaultLoading, isError: vaultError } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "vaults",
     args: [tokenId],
   });
 
-  // Read isValid
   const { data: isValid, isLoading: validLoading } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "isValid",
     args: [tokenId],
   });
 
-  // Read issuer info (only if issuer is set)
   const issuerAddress = vaultData?.[5];
-  const hasIssuer =
-    issuerAddress && issuerAddress !== "0x0000000000000000000000000000000000000000";
+  const hasIssuer = issuerAddress && issuerAddress !== "0x0000000000000000000000000000000000000000";
 
   const { data: issuerData } = useScaffoldReadContract({
     contractName: "VaultIDV3",
@@ -44,7 +74,7 @@ const VerifyPage: NextPage = () => {
 
   const handleCheck = () => {
     if (checkTokenId.trim()) {
-      router.push(`/verify/${checkTokenId.trim()}`);
+      window.location.href = `/verify?id=${checkTokenId.trim()}`;
     }
   };
 
@@ -144,7 +174,7 @@ const VerifyPage: NextPage = () => {
                     <Address address={issuer} />
                     {issuerData?.[0] && <span className="text-sm font-semibold">({issuerData[0]})</span>}
                     {issuerData?.[1] && <span className="badge badge-success badge-sm">Verified</span>}
-                    <Link href={`/issuer/${issuer}`} className="btn btn-xs btn-ghost">
+                    <Link href={`/issuer?addr=${issuer}`} className="btn btn-xs btn-ghost">
                       Issuer Profile
                     </Link>
                   </div>
@@ -167,14 +197,13 @@ const VerifyPage: NextPage = () => {
             </div>
 
             <div className="mt-4">
-              <Link href={`/vault/${tokenId.toString()}`} className="btn btn-outline btn-sm">
+              <Link href={`/vault?id=${tokenId.toString()}`} className="btn btn-outline btn-sm">
                 Full Vault Details
               </Link>
             </div>
           </div>
         </div>
 
-        {/* Check another */}
         <div className="card bg-base-100 shadow-xl">
           <div className="card-body">
             <h3 className="font-semibold mb-2">Check another credential</h3>
@@ -196,6 +225,23 @@ const VerifyPage: NextPage = () => {
       </div>
     </div>
   );
-};
+}
 
-export default VerifyPage;
+function VerifyContent() {
+  const searchParams = useSearchParams();
+  const tokenIdParam = searchParams.get("id");
+
+  if (!tokenIdParam) {
+    return <TokenIdForm />;
+  }
+
+  return <VerifyDetail tokenId={BigInt(tokenIdParam)} />;
+}
+
+export default function VerifyPage() {
+  return (
+    <Suspense fallback={<div className="flex justify-center items-center grow pt-20"><span className="loading loading-spinner loading-lg" /></div>}>
+      <VerifyContent />
+    </Suspense>
+  );
+}

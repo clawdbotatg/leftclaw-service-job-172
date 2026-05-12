@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import type { NextPage } from "next";
+import { useSearchParams } from "next/navigation";
 import { useAccount } from "wagmi";
 import { Address, AddressInput } from "@scaffold-ui/components";
 import { useScaffoldReadContract, useScaffoldWriteContract } from "~~/hooks/scaffold-eth";
@@ -12,10 +11,42 @@ import { notification } from "~~/utils/scaffold-eth";
 
 const CRED_TYPE_LABELS = ["VAULT", "MEMBERSHIP", "CREDENTIAL", "PASS", "RECEIPT", "DOCUMENT"];
 
-const VaultDetail: NextPage = () => {
-  const params = useParams();
-  const tokenId = BigInt((params?.tokenId as string) ?? "0");
+function TokenIdForm() {
+  const [inputId, setInputId] = useState("");
+  return (
+    <div className="flex items-center justify-center grow pt-20">
+      <div className="card bg-base-100 shadow-xl max-w-md w-full mx-4">
+        <div className="card-body">
+          <h2 className="card-title justify-center">View VaultID</h2>
+          <p className="opacity-70 text-center text-sm">Enter a token ID to view vault details.</p>
+          <div className="flex gap-2 mt-4">
+            <input
+              type="number"
+              className="input input-bordered flex-1"
+              placeholder="Token ID"
+              value={inputId}
+              onChange={e => setInputId(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && inputId.trim() && (window.location.href = `/vault?id=${inputId.trim()}`)}
+            />
+            <button
+              className="btn btn-primary"
+              onClick={() => inputId.trim() && (window.location.href = `/vault?id=${inputId.trim()}`)}
+            >
+              View
+            </button>
+          </div>
+          <div className="card-actions justify-center mt-2">
+            <Link href="/" className="btn btn-ghost btn-sm">
+              Home
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+function VaultDetail({ tokenId }: { tokenId: bigint }) {
   const { address: connectedAddress, isConnected } = useAccount();
 
   const [newRecoveryWallet, setNewRecoveryWallet] = useState("");
@@ -26,28 +57,24 @@ const VaultDetail: NextPage = () => {
 
   const { writeAndOpen } = useWriteAndOpen();
 
-  // Read vault data
   const { data: vaultData, isLoading: vaultLoading } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "vaults",
     args: [tokenId],
   });
 
-  // Read isValid
   const { data: isValid } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "isValid",
     args: [tokenId],
   });
 
-  // Read ownerOf
   const { data: ownerOf, isError: notExists } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "ownerOf",
     args: [tokenId],
   });
 
-  // Read viewer permissions for connected address
   const { data: hasViewerPermission } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "viewerPermissions",
@@ -55,7 +82,6 @@ const VaultDetail: NextPage = () => {
     query: { enabled: isConnected },
   });
 
-  // Read membership data (if MEMBERSHIP type)
   const { data: membershipData } = useScaffoldReadContract({
     contractName: "VaultIDV3",
     functionName: "memberships",
@@ -217,12 +243,11 @@ const VaultDetail: NextPage = () => {
               {getStatusBadge()}
             </div>
           </div>
-          <Link href={`/verify/${tokenId.toString()}`} className="btn btn-outline btn-sm">
+          <Link href={`/verify?id=${tokenId.toString()}`} className="btn btn-outline btn-sm">
             Public View
           </Link>
         </div>
 
-        {/* Main Info */}
         <div className="card bg-base-100 shadow-xl mb-6">
           <div className="card-body gap-4">
             <h2 className="card-title text-lg">Vault Information</h2>
@@ -247,7 +272,7 @@ const VaultDetail: NextPage = () => {
                 {issuer && issuer !== "0x0000000000000000000000000000000000000000" ? (
                   <div className="flex items-center gap-2">
                     <Address address={issuer} />
-                    <Link href={`/issuer/${issuer}`} className="btn btn-xs btn-ghost">
+                    <Link href={`/issuer?addr=${issuer}`} className="btn btn-xs btn-ghost">
                       Profile
                     </Link>
                   </div>
@@ -286,7 +311,6 @@ const VaultDetail: NextPage = () => {
           </div>
         </div>
 
-        {/* Membership info */}
         {credTypeRaw === 1 && membershipData && (
           <div className="card bg-base-100 shadow-xl mb-6">
             <div className="card-body gap-3">
@@ -309,13 +333,11 @@ const VaultDetail: NextPage = () => {
           </div>
         )}
 
-        {/* Owner Management */}
         {isOwner && (
           <div className="card bg-base-100 shadow-xl mb-6">
             <div className="card-body gap-6">
               <h2 className="card-title text-lg">Manage Vault</h2>
 
-              {/* Revoke / Unrevoke */}
               <div className="flex gap-3">
                 {!revoked ? (
                   <button className="btn btn-error btn-sm" disabled={isPending} onClick={handleRevoke}>
@@ -330,7 +352,6 @@ const VaultDetail: NextPage = () => {
                 )}
               </div>
 
-              {/* Extend Expiry */}
               <div className="form-control gap-2">
                 <label className="label">
                   <span className="label-text font-semibold">Extend Expiry</span>
@@ -349,7 +370,6 @@ const VaultDetail: NextPage = () => {
                 </div>
               </div>
 
-              {/* Set Recovery Wallet */}
               <div className="form-control gap-2">
                 <label className="label">
                   <span className="label-text font-semibold">Set Recovery Wallet</span>
@@ -365,7 +385,6 @@ const VaultDetail: NextPage = () => {
                 </div>
               </div>
 
-              {/* Grant Viewer */}
               <div className="form-control gap-2">
                 <label className="label">
                   <span className="label-text font-semibold">Grant Viewer Permission</span>
@@ -381,7 +400,6 @@ const VaultDetail: NextPage = () => {
                 </div>
               </div>
 
-              {/* Revoke Viewer */}
               <div className="form-control gap-2">
                 <label className="label">
                   <span className="label-text font-semibold">Revoke Viewer Permission</span>
@@ -397,7 +415,6 @@ const VaultDetail: NextPage = () => {
                 </div>
               </div>
 
-              {/* Invite Signer */}
               <div className="form-control gap-2">
                 <label className="label">
                   <span className="label-text font-semibold">Invite Signer</span>
@@ -417,7 +434,7 @@ const VaultDetail: NextPage = () => {
         )}
 
         <div className="flex gap-4">
-          <Link href={`/verify/${tokenId.toString()}`} className="btn btn-outline btn-sm">
+          <Link href={`/verify?id=${tokenId.toString()}`} className="btn btn-outline btn-sm">
             Public Verify View
           </Link>
           <Link href="/" className="btn btn-ghost btn-sm">
@@ -427,6 +444,23 @@ const VaultDetail: NextPage = () => {
       </div>
     </div>
   );
-};
+}
 
-export default VaultDetail;
+function VaultContent() {
+  const searchParams = useSearchParams();
+  const tokenIdParam = searchParams.get("id");
+
+  if (!tokenIdParam) {
+    return <TokenIdForm />;
+  }
+
+  return <VaultDetail tokenId={BigInt(tokenIdParam)} />;
+}
+
+export default function VaultPage() {
+  return (
+    <Suspense fallback={<div className="flex justify-center items-center grow pt-20"><span className="loading loading-spinner loading-lg" /></div>}>
+      <VaultContent />
+    </Suspense>
+  );
+}

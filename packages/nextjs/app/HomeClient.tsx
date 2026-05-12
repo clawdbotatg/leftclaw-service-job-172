@@ -46,7 +46,7 @@ const HomeClient: NextPage = () => {
                 type, and issuer information.
               </p>
               <div className="card-actions justify-end mt-4">
-                <Link href="/verify/1" className="btn btn-outline">
+                <Link href="/verify?id=1" className="btn btn-outline">
                   Verify a Token
                 </Link>
               </div>
@@ -80,7 +80,7 @@ const HomeClient: NextPage = () => {
                 <li>VaultIDs are soulbound — they cannot be transferred, only burned or recovered via backup wallet</li>
                 <li>
                   Public verifiers can check validity without seeing the encrypted payload at{" "}
-                  <code className="font-mono text-xs bg-base-300 px-1 rounded">/verify/[tokenId]</code>
+                  <code className="font-mono text-xs bg-base-300 px-1 rounded">/verify?id=[tokenId]</code>
                 </li>
               </ul>
             </div>
